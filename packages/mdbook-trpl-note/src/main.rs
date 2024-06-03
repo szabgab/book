@@ -22,7 +22,19 @@ fn main() -> Result<(), String> {
     serde_json::to_writer(io::stdout(), &processed).map_err(|e| format!("{e}"))
 }
 
-/// A simple preprocessor for semantic notes in _The Rust Programming Language_.
+/// A simple preprocessor for semantic notes in The Rust Programming Language
+/// book.
+///
+/// Note: This is not yet intended for general usage, as the format it uses for
+/// callouts/admonitions is wholly specific to the way the Rust book uses those,
+/// and totally incompatible with e.g. GitHub-Flavored Markdown’s admonitions.
+///
+/// It supports the two basic modes of all mdbook preprocessors:
+///
+/// • Checking renderer support, e.g. `mdbook-trpl-listing supports html`.
+///
+/// • Accepting input from `stdin` when invoked by mdbook itself as part of
+///   preprocessing a book.
 #[derive(Parser, Debug)]
 struct Cli {
     #[command(subcommand)]

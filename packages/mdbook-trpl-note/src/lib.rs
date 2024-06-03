@@ -1,3 +1,6 @@
+//! A simple preprocessor for semantic notes (“callouts” or “admonitions”) in
+//! _The Rust Programming Language_.
+
 use mdbook::{
     book::Book,
     errors::Result,
@@ -9,25 +12,12 @@ use pulldown_cmark::{
     Event::{self, *},
     Tag, TagEnd,
 };
-use pulldown_cmark_to_cmark::cmark;
 
-/// A simple preprocessor for semantic notes in _The Rust Programming Language_.
-///
-/// Takes in Markdown like this:
-///
-/// ```markdown
-/// > Note: This is a note.
-/// ```
-///
-/// Spits out Markdown like this:
-///
-/// ```markdown
-/// <section class="note" aria-role="note">
-///
-/// This is a note.
-///
-/// </section>
-/// ```
+/// A marker struct to implement the [`mdbook::preprocess::Preprocessor`] trait.
+/// This type has no state or behavior of its own. The interesting behavior is
+/// all part of the [`rewrite`] function, which allows the preprocessor’s
+/// functionality to be used directly as well as via `mdbook`. See the docs for
+/// [`rewrite`] for more.
 pub struct TrplNote;
 
 impl Preprocessor for TrplNote {
@@ -53,6 +43,60 @@ impl Preprocessor for TrplNote {
     }
 }
 
+/// Rewrite a source Markdown string, transforming two kinds of “notes” using
+/// Markdown block quote syntax into block HTML with appropriate semantics for
+/// admonitions or callouts.
+///
+/// In all cases, it preserves the original Markdown semantics of the content of
+/// the note, but removes the block quote container.
+///
+/// ## Basic notes
+///
+/// The first kind of note supported uses `> Note:` as the marker that the item
+/// is an admonition/callout rather than a block quote.
+///
+/// Given input like this:
+///
+/// ```markdown
+/// > Note: This is a note.
+/// ```
+///
+/// This function emits Markdown like this:
+///
+/// ```markdown
+/// <section class="note" aria-role="note">
+///
+/// This is a note.
+///
+/// </section>
+/// ```
+///
+/// ## Notes with headings
+///
+/// The second kind of note is one with an initial heading. For the purposes of
+/// this preprocessor, we assume that *any* quote with an initial heading is in
+/// fact an admonition. (This is certainly not true of quotes in general, but it
+/// is for the purposes of the Rust book!)
+///
+/// Given input like this (but with any Markdown heading level):
+///
+/// ```markdown
+/// > ## Some heading
+/// >
+/// > This is a note.
+/// ```
+///
+/// This function emits Markdown like this:
+///
+/// ```markdown
+/// <section class="note" aria-role="note">
+///
+/// ## Some heading
+///
+/// This is a note.
+///
+/// </section>
+/// ```
 pub fn rewrite(text: &str) -> String {
     let parser = new_cmark_parser(text, true);
 
@@ -67,16 +111,18 @@ pub fn rewrite(text: &str) -> String {
 
             (StartingBlockquote(blockquote_events), Text(content)) => {
                 if content.starts_with("Note: ") {
-                    // This needs the "extra" `SoftBreak`s so that when the final rendering pass
-                    // happens, it does not end up treating the internal content as inline *or*
-                    // treating the HTML tags as inline tags:
+                    // This needs the "extra" `SoftBreak`s so that when the
+                    // final rendering pass happens, it does not end up treating
+                    // the internal content as inline *or* treating the HTML
+                    // tags as inline tags:
                     //
-                    // - Content inside HTML blocks is only rendered as Markdown when it is
-                    //   separated from the block HTML elements: otherwise it gets treated as inline
-                    //   HTML and *not* rendered.
-                    // - Along the same lines, an HTML tag that happens to be directly adjacent to
-                    //   the end of a previous Markdown block will end up being rendered as part of
-                    //   that block.
+                    // - Content inside HTML blocks is only rendered as Markdown
+                    //   when it is separated from the block HTML elements:
+                    //   otherwise it gets treated as inline HTML and *not*
+                    //   rendered.
+                    // - Along the same lines, an HTML tag that happens to be
+                    //   directly adjacent to the end of a previous Markdown
+                    //   block will end up being rendered as part of that block.
                     events.extend([
                         SoftBreak,
                         SoftBreak,
@@ -133,7 +179,7 @@ pub fn rewrite(text: &str) -> String {
     }
 
     let mut buf = String::new();
-    cmark(events.into_iter(), &mut buf).unwrap();
+    pulldown_cmark_to_cmark::cmark(events.into_iter(), &mut buf).unwrap();
     buf
 }
 

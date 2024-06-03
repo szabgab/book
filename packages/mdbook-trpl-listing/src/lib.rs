@@ -1,3 +1,6 @@
+//! A simple mdbook preprocessor for improved accessibility for rendering code
+//! listings in _The Rust Programming Language_.
+
 use mdbook::{
     book::Book,
     errors::Result,
@@ -6,10 +9,154 @@ use mdbook::{
     BookItem,
 };
 use pulldown_cmark::{html, Event};
-use pulldown_cmark_to_cmark::cmark;
 use xmlparser::{Token, Tokenizer};
 
-/// A preprocessor for rendering listings more elegantly.
+/// A marker struct to implement the [`mdbook::preprocess::Preprocessor`] trait.
+/// This type has no state or behavior of its own. The interesting behavior is
+/// all part of the [`rewrite`] function, which allows the preprocessor’s
+/// functionality to be used directly as well as via `mdbook`. See the docs for
+/// [`rewrite`] for more.
+pub struct TrplListing;
+
+impl Preprocessor for TrplListing {
+    fn name(&self) -> &str {
+        "trpl-listing"
+    }
+
+    fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
+        let config = ctx
+            .config
+            .get_preprocessor(self.name())
+            .ok_or(Error::NoConfig)?;
+
+        let key = String::from("output-mode");
+        let mode = config
+            .get(&key)
+            .map(|value| match value.as_str() {
+                Some(s) => Mode::try_from(s).map_err(|ModeParseErr(s)| {
+                    Error::BadValue {
+                        key,
+                        value: s.to_string(),
+                    }
+                }),
+                None => Err(Error::BadValue {
+                    key,
+                    value: value.to_string(),
+                }),
+            })
+            .transpose()?
+            .unwrap_or(Mode::Default);
+
+        let mut errors = Vec::new();
+        book.for_each_mut(|item| {
+            if let BookItem::Chapter(ref mut chapter) = item {
+                match rewrite(&chapter.content, mode) {
+                    Ok(rewritten) => chapter.content = rewritten,
+                    Err(error) => errors.extend(error),
+                }
+            }
+        });
+
+        if errors.is_empty() {
+            Ok(book)
+        } else {
+            Err(Error::Rewrite(CompositeError(errors)).into())
+        }
+    }
+
+    fn supports_renderer(&self, renderer: &str) -> bool {
+        renderer == "html" || renderer == "markdown"
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("No config for trpl-listing")]
+    NoConfig,
+
+    #[error("Bad config value '{value}' for key '{key}'")]
+    BadValue { key: String, value: String },
+
+    #[error("Error rewriting Markdown source: {0}")]
+    Rewrite(CompositeError),
+}
+
+#[derive(Debug, thiserror::Error)]
+struct CompositeError(Vec<RewriteErr>);
+
+impl std::fmt::Display for CompositeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Error(s) rewriting input:\n\t{}",
+            self.0
+                .iter()
+                .map(|e| format!("{e}"))
+                .collect::<Vec<String>>()
+                .join("\n\t")
+        )
+    }
+}
+
+/// How should the `<Listing>` be rendered in output?
+///
+/// This supports both modes that the Rust book needs:
+///
+/// - Rendering to HTML for the website ([`Mode::Default`]).
+/// - Rendering to a simplified Markdown used as source for the NoStarch print
+///   version of the text ([`Mode::Simple`]).
+#[derive(Debug, Clone, Copy)]
+pub enum Mode {
+    /// Emit rich, semantic HTML representing the code listing. See [`rewrite`]
+    /// for the details.
+    Default,
+    /// Strip all the extra HTML in favor of emitting basic paragraphs for the
+    /// file name and listing number.
+    Simple,
+}
+
+/// An error occurred attempting to parse a [`Mode`] from a string.
+pub struct ModeParseErr<'s>(&'s str);
+
+impl<'s> TryFrom<&'s str> for Mode {
+    type Error = ModeParseErr<'s>;
+
+    fn try_from(value: &'s str) -> std::prelude::v1::Result<Self, Self::Error> {
+        match value {
+            "default" => Ok(Mode::Default),
+            "simple" => Ok(Mode::Simple),
+            _ => Err(ModeParseErr(value)),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RewriteErr {
+    UnclosedListing,
+    UnopenedListing,
+    Fmt(std::fmt::Error),
+    Tokenize(String),
+}
+
+impl std::fmt::Display for RewriteErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RewriteErr::UnclosedListing => {
+                write!(f, "Unclosed `<Listing>` tag")
+            }
+            RewriteErr::UnopenedListing => {
+                write!(f, "Closing `</Listing>` without opening `<Listing>`")
+            }
+            RewriteErr::Fmt(fmt_err) => write!(f, "{fmt_err}"),
+            RewriteErr::Tokenize(reason) => {
+                write!(f, "Could not tokenize text as HTML: {reason}")
+            }
+        }
+    }
+}
+
+/// Rewrite a source Markdown string, replacing `<Listing>` elements in the
+/// Markdown source with [`Mode`]-specific output.
 ///
 /// Given input like this:
 ///
@@ -51,105 +198,20 @@ use xmlparser::{Token, Tokenizer};
 ///
 /// Listing 1-2: Some *text*, yeah?
 /// ````
-pub struct TrplListing;
-
-impl Preprocessor for TrplListing {
-    fn name(&self) -> &str {
-        "trpl-listing"
-    }
-
-    fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
-        let config = ctx
-            .config
-            .get_preprocessor(self.name())
-            .ok_or(Error::NoConfig)?;
-
-        let key = String::from("output-mode");
-        let mode = config
-            .get(&key)
-            .map(|value| match value.as_str() {
-                Some(s) => Mode::try_from(s).map_err(|_| Error::BadValue {
-                    key,
-                    value: value.to_string(),
-                }),
-                None => Err(Error::BadValue {
-                    key,
-                    value: value.to_string(),
-                }),
-            })
-            .transpose()?
-            .unwrap_or(Mode::Default);
-
-        let mut errors: Vec<String> = vec![];
-        book.for_each_mut(|item| {
-            if let BookItem::Chapter(ref mut chapter) = item {
-                match rewrite_listing(&chapter.content, mode) {
-                    Ok(rewritten) => chapter.content = rewritten,
-                    Err(reason) => errors.push(reason),
-                }
-            }
-        });
-
-        if errors.is_empty() {
-            Ok(book)
-        } else {
-            Err(CompositeError(errors.join("\n")).into())
-        }
-    }
-
-    fn supports_renderer(&self, renderer: &str) -> bool {
-        renderer == "html" || renderer == "markdown"
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum Error {
-    #[error("No config for trpl-listing")]
-    NoConfig,
-
-    #[error("Bad config value '{value}' for key '{key}'")]
-    BadValue { key: String, value: String },
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Error(s) rewriting input: {0}")]
-struct CompositeError(String);
-
-#[derive(Debug, Clone, Copy)]
-enum Mode {
-    Default,
-    Simple,
-}
-
-/// Trivial marker struct to indicate an internal error.
-///
-/// The caller has enough info to do what it needs without passing data around.
-struct ParseErr;
-
-impl TryFrom<&str> for Mode {
-    type Error = ParseErr;
-
-    fn try_from(value: &str) -> std::prelude::v1::Result<Self, Self::Error> {
-        match value {
-            "default" => Ok(Mode::Default),
-            "simple" => Ok(Mode::Simple),
-            _ => Err(ParseErr),
-        }
-    }
-}
-
-fn rewrite_listing(src: &str, mode: Mode) -> Result<String, String> {
+pub fn rewrite(src: &str, mode: Mode) -> Result<String, Vec<RewriteErr>> {
     let parser = new_cmark_parser(src, true);
 
     struct State<'e> {
         current_listing: Option<Listing>,
-        events: Vec<Result<Event<'e>, String>>,
+        events: Vec<Event<'e>>,
+        errors: Vec<RewriteErr>,
     }
 
     let final_state = parser.fold(
         State {
             current_listing: None,
             events: vec![],
+            errors: vec![],
         },
         |mut state, ev| {
             match ev {
@@ -193,9 +255,11 @@ fn rewrite_listing(src: &str, mode: Mode) -> Result<String, String> {
                                 };
 
                                 state.current_listing = Some(listing);
-                                state.events.push(Ok(opening_event));
+                                state.events.push(opening_event);
                             }
-                            Err(reason) => state.events.push(Err(reason)),
+                            Err(reason) => {
+                                state.errors.push(RewriteErr::Tokenize(reason))
+                            }
                         }
                     } else if tag.starts_with("</Listing>") {
                         let trailing = if !tag.ends_with('>') {
@@ -220,40 +284,34 @@ fn rewrite_listing(src: &str, mode: Mode) -> Result<String, String> {
                                 };
 
                                 state.current_listing = None;
-                                state.events.push(Ok(closing_event));
+                                state.events.push(closing_event);
                             }
-                            None => state.events.push(Err(String::from(
-                                "Closing `</Listing>` without opening tag.",
-                            ))),
+                            None => {
+                                state.errors.push(RewriteErr::UnopenedListing)
+                            }
                         }
                     } else {
-                        state.events.push(Ok(Event::Html(tag)));
+                        state.events.push(Event::Html(tag));
                     }
                 }
-                ev => state.events.push(Ok(ev)),
+                ev => state.events.push(ev),
             };
             state
         },
     );
 
     if final_state.current_listing.is_some() {
-        return Err("Unclosed listing".into());
+        return Err(vec![RewriteErr::UnclosedListing]);
     }
 
-    let (events, errors): (Vec<_>, Vec<_>) =
-        final_state.events.into_iter().partition(|e| e.is_ok());
-
-    if !errors.is_empty() {
-        return Err(errors
-            .into_iter()
-            .map(|e| e.unwrap_err())
-            .collect::<Vec<String>>()
-            .join("\n"));
+    if !final_state.errors.is_empty() {
+        return Err(final_state.errors);
     }
 
     let mut buf = String::with_capacity(src.len() * 2);
-    cmark(events.into_iter().map(|ok| ok.unwrap()), &mut buf)
-        .map_err(|e| format!("{e}"))?;
+    pulldown_cmark_to_cmark::cmark(final_state.events.into_iter(), &mut buf)
+        .map_err(|e| vec![RewriteErr::Fmt(e)])?;
+
     Ok(buf)
 }
 
@@ -369,7 +427,7 @@ mod tests {
     /// done by the `pulldown_cmark_to_cmark` crate.
     #[test]
     fn default_mode_works() {
-        let result = rewrite_listing(
+        let result = rewrite(
             r#"<Listing number="1-2" caption="A write-up which *might* include inline Markdown like `code` etc." file-name="src/main.rs">
 
 ```rust
@@ -396,7 +454,7 @@ fn main() {}
 
     #[test]
     fn simple_mode_works() {
-        let result = rewrite_listing(
+        let result = rewrite(
             r#"<Listing number="1-2" caption="A write-up which *might* include inline Markdown like `code` etc." file-name="src/main.rs">
 
 ```rust
@@ -422,7 +480,7 @@ Listing 1-2: A write-up which <em>might</em> include inline Markdown like <code>
 
     #[test]
     fn actual_listing() {
-        let result = rewrite_listing(
+        let result = rewrite(
             r#"Now open the *main.rs* file you just created and enter the code in Listing 1-1.
 
 <Listing number="1-1" file-name="main.rs" caption="A program that prints `Hello, world!`">
@@ -462,7 +520,7 @@ Save the file and go back to your terminal window"#
 
     #[test]
     fn no_filename() {
-        let result = rewrite_listing(
+        let result = rewrite(
             r#"This is the opening.
 
 <Listing number="1-1" caption="This is the caption">
@@ -740,7 +798,7 @@ This is the closing."#
             let err = result.unwrap_err();
             assert_eq!(
                 format!("{err}"),
-                "Bad config value '\"nonsense\"' for key 'output-mode'"
+                "Bad config value 'nonsense' for key 'output-mode'"
             );
         }
     }
