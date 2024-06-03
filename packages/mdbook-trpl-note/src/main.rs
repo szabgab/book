@@ -16,8 +16,8 @@ fn main() -> Result<(), String> {
         };
     }
 
-    let (ctx, book) =
-        CmdPreprocessor::parse_input(io::stdin()).map_err(|e| format!("blah: {e}"))?;
+    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())
+        .map_err(|e| format!("Error preprocessing Markdown: {e}"))?;
     let processed = simple_note.run(&ctx, book).map_err(|e| format!("{e}"))?;
     serde_json::to_writer(io::stdout(), &processed).map_err(|e| format!("{e}"))
 }
