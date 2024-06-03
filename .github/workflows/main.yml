@@ -38,15 +38,7 @@ jobs:
         rustup set profile minimal
         rustup toolchain install 1.76 -c rust-docs
         rustup default 1.76
-    - name: Run `tools` package tests
-      run: |
-        cargo test
-    - name: Run `mdbook-trpl-note` package tests
-      working-directory: packages/mdbook-trpl-note
-      run: |
-        cargo test
-    - name: Run `mdbook-trpl-listing` package tests
-      working-directory: packages/mdbook-trpl-listing
+    - name: Run package tests
       run: |
         cargo test
   lint:
