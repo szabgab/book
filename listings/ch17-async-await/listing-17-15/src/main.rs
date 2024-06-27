@@ -2,10 +2,10 @@ use std::time::Duration;
 
 fn main() {
     trpl::block_on(async {
-        // ANCHOR: with-move
         let (tx, mut rx) = trpl::channel();
 
-        let tx_fut = async move {
+        let tx1 = tx.clone();
+        let tx1_fut = async move {
             let vals = vec![
                 String::from("hi"),
                 String::from("from"),
@@ -14,19 +14,36 @@ fn main() {
             ];
 
             for val in vals {
-                tx.send(val).unwrap();
+                tx1.send(val).unwrap();
                 trpl::sleep(Duration::from_secs(1)).await;
             }
         };
 
         let rx_fut = async {
             while let Some(value) = rx.recv().await {
-                eprintln!("received '{value}'");
+                println!("received '{value}'");
             }
         };
 
-        trpl::join(tx_fut, rx_fut).await;
-        // ANCHOR_END: with-move
+        let tx_fut = async move {
+            let vals = vec![
+                String::from("more"),
+                String::from("messages"),
+                String::from("for"),
+                String::from("you"),
+            ];
+
+            for val in vals {
+                tx.send(val).unwrap();
+                trpl::sleep(Duration::from_secs(1)).await;
+            }
+        };
+
+        // ANCHOR: here
+        let futures =
+            vec![Box::new(tx1_fut), Box::new(rx_fut), Box::new(tx_fut)];
+
+        trpl::join_all(futures).await;
+        // ANCHOR_END: here
     });
 }
-// ANCHOR_END: all

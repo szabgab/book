@@ -1,9 +1,10 @@
 // ANCHOR: main
 fn main() {
-    hello_async().await;
+    hello("async").await;
 }
 // ANCHOR_END: main
 
-async fn hello_async() {
-    println!("Hello, async!");
+async fn hello(name: &str) {
+    let greeting = format!("Hello, {name}!");
+    println!("{greeting}");
 }

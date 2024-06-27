@@ -1,8 +1,7 @@
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 fn main() {
     trpl::block_on(async {
-        // ANCHOR: here
         let (tx, mut rx) = trpl::channel();
 
         let tx1 = tx.clone();
@@ -40,7 +39,11 @@ fn main() {
             }
         };
 
-        trpl::join3(tx1_fut, tx_fut, rx_fut).await;
+        // ANCHOR: here
+        let futures: Vec<Box<dyn Future<Output = ()>>> =
+            vec![Box::new(tx1_fut), Box::new(rx_fut), Box::new(tx_fut)];
         // ANCHOR_END: here
+
+        trpl::join_all(futures).await;
     });
 }

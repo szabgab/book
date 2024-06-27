@@ -4,8 +4,8 @@ fn main() {
     trpl::block_on(async {
         let (tx, mut rx) = trpl::channel();
 
-        // ANCHOR: futures
-        let tx_fut = async {
+        let tx1 = tx.clone();
+        let tx1_fut = async move {
             let vals = vec![
                 String::from("hi"),
                 String::from("from"),
@@ -14,20 +14,33 @@ fn main() {
             ];
 
             for val in vals {
-                tx.send(val).unwrap();
+                tx1.send(val).unwrap();
                 trpl::sleep(Duration::from_secs(1)).await;
             }
         };
 
         let rx_fut = async {
-            // ANCHOR: loop
             while let Some(value) = rx.recv().await {
                 println!("received '{value}'");
             }
-            // ANCHOR_END: loop
         };
 
-        trpl::join(tx_fut, rx_fut).await;
-        // ANCHOR_END: futures
+        let tx_fut = async move {
+            let vals = vec![
+                String::from("more"),
+                String::from("messages"),
+                String::from("for"),
+                String::from("you"),
+            ];
+
+            for val in vals {
+                tx.send(val).unwrap();
+                trpl::sleep(Duration::from_secs(1)).await;
+            }
+        };
+
+        // ANCHOR: here
+        trpl::join!(tx1_fut, tx_fut, rx_fut);
+        // ANCHOR_END: here
     });
 }
